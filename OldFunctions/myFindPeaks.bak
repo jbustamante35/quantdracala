@@ -1,0 +1,169 @@
+function myFindPeaks(imX, R)
+
+%% Load full plate image
+qlIm = imread(im_file);
+pslIm = ql2psl(qlIm, 200, 10000, 5, 65535, 'QL2PSL');
+
+%% Get regressor image
+load('testImages_171005.mat'); % contains croppedImages
+[alignImages, allImages] = createMatrix(croppedImages); % from QD_PCA()
+subX = bsxfun(@minus, alignImages, mean(alignImages, 1)); 
+covX = cov(subX); 
+[eigX, ~] = eigs(covX, NumComponents); 
+regression_vector = eigX * regressor; % regression image vectorized
+imRegressor = reshape(regression_vector, 41, 41); % regression image
+
+%% Calculate radius size of entire image by sliding regressor image across full plate image
+% meanInner = cat(1, fullTrainingStructure.InnerRadius.DistanceFromCenter); % user-defined mean radius
+% meanOuter = cat(1, fullTrainingStructure.OuterRadius.DistanceFromCenter);
+% R_inner = colfilt(pslIm, [40 40], 'sliding', @(x) myBlockProc(x, meanX', Rinner_im, meanInner));
+% R_outer = colfilt(pslIm, [40 40], 'sliding', @(x) myBlockProc(x, meanX', Router_im, meanOuter));
+
+% Perform radius prediction function across entire image in [n n] blocks
+% defined by the size of the regressor image
+meanX = mean(alignImages, 1); % Mean of entire data matrix
+meanRadius = cat(1,fullTrainingStructure.InnerRadius.DistanceFromCenter);
+imSlideRegressor = colfilt(pslIm, [40 40], 'sliding', @(x) myBlockProc(x, meanX', imRegressor, meanRadius));
+
+%% Check predicted radius of original centroids 
+psl_edge = edge(pslIm, 'canny');
+[oldCentroid, ~] = imfindcircles(psl_edge, [10 30]);
+[~, ~, oldPredictedRadius] = impixel(imSlideRegressor, oldCentroid(:,1), oldCentroid(:,2));
+
+%% Find corrdinates of all local maxima (location of 'real' centroid)
+% Dilate regressor image to convolve radii predictions
+regressorDilate = imdilate(imSlideRegressor, strel('disk', 6)); 
+
+%% Overlay all inner and outer predictions on original image
+% Scale all colors 
+red = imX - min(imX(:));
+red = red / max(red(:));
+blue = imSlide_outer - min(imSlide_outer(:));
+blue = blue / max(blue(:));
+green = imSlide_inner - min(imSlide_inner(:));
+green = green / max(green(:));
+
+rgb = cat(3, red, blue, green);
+
+
+%% Check quality of dilation
+dSize = 4;
+se = strel('disk', dSize , 0);
+innerFilt = imfilter(imSlide_inner, fspecial('disk', 4));
+inner_dilate = imdilate(innerFilt, se);
+figure; 
+imshow(inner_dilate,[]);
+
+findZeros = inner_dilate == innerFilt;
+[zeroCol, zeroRow] = find(findZeros == 1);
+zeroSpots = [zeroRow zeroCol];
+figure; imshow(imX,[]);
+hold on;
+plot(zeroSpots(:,1), zeroSpots(:,2), 'rx');
+plot(oldCentroid(:,1), oldCentroid(:,2), 'bx');
+msgbox(sprintf('Found %d hits\n', length(zeroSpots)));
+
+%%
+%{
+% potato = outer_dilate - imSlide_outer;
+% [rowZ, colZ] = find(potato == 0);
+% cenZ = [rowZ colZ];
+% imshow(imX,[]);
+% hold on;
+% plot(cenZ(:,1), cenZ(:,2), 'rx');
+
+j = 1;
+for i = 1:size(imSlideRegressor, 1)
+    for ii = 1:size(imSlideRegressor, 2)
+        if (imSlideRegressor(i, ii) == regressorDilate(i, ii))
+            fprintf('Found Local Maxima at (%d, %d)\n', i, ii);
+            localMax(j, :) = [i ii];
+            j = j + 1;
+        end
+    end
+end
+%}
+
+%% Set new centroid coordinate to local maxima of radius predictions
+% If difference in new coordinate is > 15 px, just use old coordinate
+jDist = @(x1, y1, x2, y2) sqrt((x1 - x2).^2 + (y1 - y2).^2); % distance function
+dist2max(1:length(oldCentroid)) = 40; % Default minimum distance
+newCentroid = oldCentroid; % Array for new centroid positions
+for i = 1:length(oldCentroid)
+    for ii = 1:length(zeroSpots)
+        tmpMax = jDist(oldCentroid(i,1), oldCentroid(i,2), zeroSpots(ii, 1), zeroSpots(ii, 2));
+        if (tmpMax <= dist2max(i))
+            dist2max(i) = tmpMax;      
+            newCentroid(i,:) = [zeroSpots(ii, 1) zeroSpots(ii, 2)];
+        end
+    end
+end
+
+%% Plot radii sizes with old and new centroid coordinates
+[~, ~, newPredictedRadius] = impixel(imSlide_outer, newCentroid(:,1), newCentroid(:,2));
+newPredictedRadius = newPredictedRadius(:,1);
+figure;
+imshow(imX, []);
+hold on;
+plot(oldCentroid(:,1), oldCentroid(:,2), 'rx');
+plot(newCentroid(:,1), newCentroid(:,2), 'bx');
+viscircles(oldCentroid, oldPredictedRadius, 'Color', 'r');
+viscircles(newCentroid, newPredictedRadius, 'Color', 'b');
+
+%%
+% hold off;
+% imshow(pslIm, []);
+% hold on;
+% plot(oldCentroid(:,1), oldCentroid(:,2), 'rx');
+% plot(newCentroid(:,1), newCentroid(:,2), 'bx');
+% viscircles(newCentroid(:,1:2), predictedRadii_inner, 'Color', 'b');
+% viscircles(newCentroid(:,1:2), predictedRadii_outer, 'Color', 'g');
+% viscircles(oldCentroid(:,1:2), predictedRadii_inner, 'Color', 'r');
+% viscircles(oldCentroid(:,1:2), predictedRadii_outer, 'Color', 'y');
+
+%% 
+[rowP, colP, intP] = impixel();
+hold on;
+plot(rowP,colP,'yx');
+intP = intP(:,1);
+viscircles([rowP colP], intP);
+%%
+[rowF,colF,intF] = improfile();
+hold on; 
+plot(rowF, colF);
+figure;
+plot(intF);
+%% SET UP NEURAL NETWORK
+doc net
+net = network(1,2);
+help feedforwardnet
+doc feedforwardnet
+feedforwardnet(2)
+net = feedforwardnet(2);
+size(myR_inner)
+size(trainingPCA_inner)
+net = train(net, trainingPCA_inner', manualR_inner');
+ypre= sim(net, trainingPCA_inner');
+figure; plot(ypre, manualR_inner, 'b.');
+validationSet
+validationPCA = cat(1, validationSet.PCAscore);
+ypre2 = sim(net, validationPCA');
+validationSet
+potato = load('171009_PrincipalComponent_3PCs_100Set_validationData.mat');
+potato.validationData
+ksdensity(ypre2);
+subplot(211); ksdensity(ypre);
+subplot(212); ksdensity(ypre2);
+
+end
+
+%% subfunction: myBlockProc
+function outIm = myBlockProc(im, im_mean, im_reg, meanR)
+
+    outIm = im_reg(:)' * bsxfun(@minus, im, im_mean) + meanR;
+
+end
+
+
+
+

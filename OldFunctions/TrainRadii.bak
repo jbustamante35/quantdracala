@@ -1,0 +1,159 @@
+function [trainingTable, regressionScore, meanRadius] = TrainRadii(trainingData, TrainingSize, Radius2Train, NumComponents, Visualize)
+%% trainRadii: function for training dataset of images to determine radii sizes
+% trainingData is a structure containing Images and PCAscore
+% Must be separated into cell array and double array! 
+%
+% asdf 
+% 
+% Usage: 
+%   [trainingTable, regressionScore] = TrainRadii(trainingData, trainingSize, NumComponents, radius2train)
+% 
+% Input: 
+%   trainingData: 
+%   TrainingSize: 
+%   Radius2Train: 
+%   NumComponents: 
+%   Visualize: 
+%
+% Output: 
+%   trainingTable: 
+%   regressionScore: 
+%   meanRadius: 
+% 
+
+%% Ask user to choose location of radius
+fprintf('Beginning training of %s Radius...\n', Radius2Train);
+trainingTable = struct2table(trainingData);
+trainingTable = getRadius(trainingTable, TrainingSize);
+
+%% Calculate distance from user's coordinate to spot's center coordinate
+trainingTable = calculateUserRadius(trainingTable);
+
+%% Perform Principal Components Regression to predict radius size 
+[trainingTable, regressionScore, meanRadius] = calculatePredictedRadius(trainingTable);
+trainedData = table2struct(trainingTable);
+
+%% Store trained data and regression score into structure and save in .mat file
+dateString = datestr(now, 'yymmdd');
+saveString_trainedData = sprintf('%s_TrainedData_%dPCs_%dSet_trainedData.mat', dateString, NumComponents, TrainingSize);
+save(saveString_trainedData, 'trainedData');
+saveString_regressionScore = sprintf('%s_TrainedData_%dPCs_%dSet_regressionScore.mat', dateString, NumComponents, TrainingSize);
+save(saveString_regressionScore, 'regressionScore');
+
+%% Quality check to compare user vs predicted radii
+if (Visualize == true)
+    figure;
+    subplot(211);
+    title(sprintf('%s Radius Training', Radius2Train));
+    hold on;
+    plot(trainingTable.DistanceFromCenter, 'r-');
+    plot(trainingTable.PredictedRadius, 'g-');
+    legend('User-Defined', 'Predicted');
+    xlabel('Training Set Image', 'FontWeight', 'bold', 'FontSize', 14);
+    ylabel(sprintf('%s Circle Radius (pix)', Radius2Train), 'FontWeight', 'bold', 'FontSize', 14);
+    ylim([0 25]);
+    
+    subplot(212);
+    title(sprintf('User vs. Predicted: %s Radius', Radius2Train));
+    plot(trainingTable.DistanceFromCenter, trainingTable.PredictedRadius, 'b.');
+    legend(sprintf('%s Radius Training', Radius2Train));
+    xlabel('User-Defined Radius', 'FontWeight', 'bold', 'FontSize', 14);
+    ylabel('Predicted Radius', 'FontWeight', 'bold', 'FontSize', 14);
+end
+
+%% Another figure to check quality of training 
+if (Visualize == true)
+    showRadii(trainingTable, TrainingSize);
+end
+
+end
+
+%%%%%%%%%%%%%%%%%%%%%%%%%% END OF MAIN PIPELINE %%%%%%%%%%%%%%%%%%%%%%%%%%
+%% subfunction: getRadius()
+function dataTable = getRadius(dataTable, trainingSize)
+    % Get radius location for each image
+    % Ask for pixel along radius of n training images    
+    dataTable.Coordinates = zeros(size(dataTable, 1), 2);
+    dataTable.Intensity = zeros(size(dataTable, 1), 3);
+    figure;
+    for i = 1:trainingSize
+        imagesc(dataTable.Image{i}), colormap gray, axis image, axis off;
+        title(sprintf('Training Set Image %d', i)); 
+        [dataTable.Coordinates(i,1), dataTable.Coordinates(i,2), dataTable.Intensity(i,:)] = impixel();
+    end
+    dataTable.Intensity(:,2:3) = []; 
+end
+
+%% subfunction: calculateUserRadius()
+function dataTable = calculateUserRadius(dataTable)
+    % Calculate distance from user-defined radius location to centroid
+    % Segment to find edges, then find circle from BW image
+    imEdges = cellfun(@(x) edge(x, 'canny', 0.01), dataTable.Image, 'UniformOutput', 0);
+    [centroids, ~] = cellfun(@(x) imfindcircles(x, [12 25], 'Method', 'TwoStage'), imEdges, 'UniformOutput', 0); 
+
+    % Add centroid location to image and use my own getDists() function to
+    % calculate distance to centroid location 
+    dataTable.Centroids = cell2mat(centroids);
+    dataTable.DistanceFromCenter = getDists(dataTable.Coordinates, dataTable.Centroids);
+    
+    
+    %% getDists()
+    function coordinateDistances = getDists(XY1, XY2)
+        % Use for a less robust distance formula to calculate
+        % coordinate distances with conflicting data types. 
+        % For this trainMyImages() function, the dist() function would 
+        % give the following error:
+        %     Error using bsxfun
+        %     Non-singleton dimensions of the two input arrays must match each other.
+        % 
+        %     Error in dist.apply>iDistApplyCPU (line 20)
+        %           z(:,q) = sum(bsxfun(@minus,w,pt(q,:)).^2,2);
+        % 
+        %     Error in dist.apply (line 11)
+        %         z = iDistApplyCPU(w,p,S,Q);
+        % 
+        %     Error in dist (line 61)
+        %       d = dist.apply(w,varargin{:});
+        %
+        % This old-fashioned getDists() function requires 2 separate double 
+        % arrays as input parameters and avoids this conflict.
+
+        x1 = XY1(:, 1);
+        y1 = XY1(:, 2);
+        x2 = XY2(:, 1);
+        y2 = XY2(:, 2);    
+        coordinateDistances = sqrt((x1 - x2).^2 + (y1 - y2).^2);    
+    end
+
+end
+
+%% subfunction: calculatePredictedRadius()
+function [dataTable, regressionScore, meanRadius] = calculatePredictedRadius(dataTable)
+    % Get predicted radius from the regression score from mean-corrected 
+    % radius distances of the training dataset
+    % Subtract off mean radius from user-defined radius distance
+    meanRadius = mean(dataTable.DistanceFromCenter);
+    dataTable.MeanCorrected = bsxfun(@minus, dataTable.DistanceFromCenter, meanRadius);
+    
+    % Left-matrix divide PCA score from mean-corrected radius to get
+    % regression score from training dataset 
+    regressionScore = dataTable.PCAscore \ dataTable.MeanCorrected;
+    dataTable.PredictedRadius = (dataTable.PCAscore * regressionScore) + meanRadius;   
+end
+
+%% subfunction: showRadii()
+function showRadii(dataTable, trainingSize)
+    figure;
+    rIndex = randperm(trainingSize, 25); 
+    for i = 1:25
+        subplot(5, 5, i);
+        imagesc(dataTable.Image{rIndex(i)}), colormap gray;
+        title(sprintf('Training Image %d', dataTable.Index(rIndex(i)))), axis image, axis off;    
+        hold on;
+        plot(dataTable.Centroids(rIndex(i),1), dataTable.Centroids(rIndex(i),2), 'bx');
+        viscircles(dataTable.Centroids(rIndex(i),:), dataTable.DistanceFromCenter(rIndex(i)), 'Color', 'r');
+        viscircles(dataTable.Centroids(rIndex(i),:), dataTable.PredictedRadius(rIndex(i)), 'Color', 'g');
+    end
+end
+
+

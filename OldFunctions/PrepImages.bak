@@ -1,0 +1,141 @@
+function [centroidTable, croppedImages] = PrepImages(im_psl, rescaleSize, radiiRange, cropBuffer, visualize)
+% PrepImages: function to process DRaCALA spots to prepare them for
+% implementating a machine learning algorithm for QuantDRaCALA_2.0's
+% Training and Analysis processes. 
+% 
+% This function takes a cell array of images with PSL-pixel values from  
+% DRaCALA experiments. Images from raw phosphoimager output contain 
+% .img files with QL-pixel values, and must be converted with the ql2psl()
+% function before analysis. 
+% 
+% This algorighm utilizes hough circle transforms to identify all the spots
+% in that image - within the range of radii inputted by the user.
+% These spots are then cropped, rescaled, and saved in a .mat file for
+% later use for downstream PCA training and quantification. 
+%
+% Usage:
+%   [centroidTable, croppedImages] = PrepImages(im_psl, rescaleSize, radiiRange, cropBuffer)
+% 
+% Input:
+%   im_psl: N x 1 cell array of images with PSL-pixel values (see ql2psl()
+%       function) where N = number of full image plates. This cell array 
+%       would typically be output from the ConvertIMG() function. 
+%   
+%   rescaleSize: 2 x 1 array in which to rescale spot images. Dimensions must
+%       be equal for correct analysis downstream in pipeline.
+%       Recommended Rescale Size: rescaleSize = [41 41];
+% 
+%   radiiRange: minimum and maximum values of expected spot radii; wide
+%       ranges can be slower to process, whereas narrow ranges may not
+%       catch all spots. Output from showSpotsOnPlate() serves as 
+%       quality check of edge()-imfindcircles() functions. 
+%       Recommended Radii Range: radiiRange = [10 30];
+% 
+%   cropBuffer: extra room to ensure cropped images contain entire spot.
+%       Typically use 10-20% of the sides of the cropped box.
+%       Recommended Buffer Size: cropBuffer = 4;
+%
+%   visualize: boolean to show various output in figures
+%       true: show found spots on full plate image and 50 random spots
+%       false: suppress verification output 
+%
+% Output:
+%   centroidTable: data table including Spot Index and Centroid Position.
+%       To be used for indexing spot after analysis to determine that
+%       spot's corresponding protein.
+%
+%   croppedImages: individual images of spots after being cropped and
+%       rescaled to n x n matrices (n = rescaledSize)
+
+%% Find Spots using Segmented Image and Store Centroid locations
+    [circleCentroid, circleRadius] = cellfun(@(x) getCircles(x, radiiRange), im_psl, 'UniformOutput', 0);
+    centroidTable = cellfun(@(x) getCentroids(x), circleCentroid, 'UniformOutput', 0);
+    
+%% Visualize all spots found on plate
+    if (visualize == true)
+        for i = 1:length(im_psl)
+            showSpotsOnPlate(im_psl{i}, circleCentroid{i}, circleRadius{i});
+        end
+    end
+
+%% Go through all Plates, Crop out all spots, and Resize to nxn pixels
+    croppedImages{length(im_psl)} = [];
+    for i = 1:length(im_psl)
+        croppedImages{i} = getScaledCrops(im_psl{i}, circleCentroid{i}, circleRadius{i}, rescaleSize, cropBuffer);
+    end
+
+%% View subset of 50 random cropped-rescaled spots
+    if (visualize == true)
+        showRandomSpots(croppedImages);
+    end
+  
+%% Save cropped and rescaled spots into .mat file
+    dateString = datestr(now, 'yymmdd');
+    saveString_crops = sprintf('%s_ProcessedImages_%dPlates_%dImages.mat', dateString, length(croppedImages), length(cat(1, croppedImages{:})));
+    save(saveString_crops, 'croppedImages');
+end
+
+%%%%%%%%%%%%%%%%%%%%%%%%%% END OF MAIN PIPELINE %%%%%%%%%%%%%%%%%%%%%%%%%%
+%% subfunction: getCircles()
+function [centroid, radius] = getCircles(im, rRange)
+    tic;
+    % Segment by finding edges, then Hough Circle Transform to find
+    % all circles in that BW image
+    im_edge = edge(im, 'Canny'); 
+    [centroid, radius] = imfindcircles(im_edge, rRange);
+    
+    fprintf('%.03f sec to find %d spots\n', toc, length(centroid));
+end
+
+%% subfunction: getCentroids()
+function outputTable = getCentroids(centroid)
+    % Store Spot Index and Centroid Positions in data table
+    Row = centroid(:,1); 
+    Column = centroid(:,2); 
+    Index = (1:length(centroid))';
+    outputTable = table(Index, Row, Column);
+end
+
+%% subfunction: getScaledCrops()
+function rescaledCrops = getScaledCrops(im, centroid, radius,scalingSize, bufferSize)
+    % Use each spot's centroid positions to crop that spot from it's
+    % corresponding plate image. Then rescale to dimensions set by scalingSize.
+    
+    % Set-up position and region to crop out spot
+    rectCoords = zeros(length(radius), 4);
+    cropSize = (radius * 2) + (bufferSize * 2);
+    rectCoords(:,1:2) = centroid - (radius + bufferSize);
+    rectCoords(:,3:4) = [cropSize cropSize];
+
+    % Crop out image and rescale to dimensions set by scalingSize
+    croppedImages = arrayfun(@(a,b,c,d) imcrop(im, [a b c d]), rectCoords(:,1), rectCoords(:,2), rectCoords(:,3), rectCoords(:,4), 'UniformOutput', 0);
+    rescaledCrops = cellfun(@(x) imresize(x, scalingSize), croppedImages, 'UniformOutput', 0);
+end
+
+%% subfunction: showSpotsOnPlate()
+function showSpotsOnPlate(im, centroid, radius)
+    % Visualize spots found on corresponding full plate image
+    figure;
+    imagesc(im), colormap gray, axis image, axis off;
+    hold on;
+    viscircles(centroid, radius);
+end
+
+%% subfunction: showRandomSpots(switch)
+function showRandomSpots(croppedImages)
+    % Show a small sample of 50 images to assess accuracy of cropping
+    
+    % Concatenate all spots then set random index
+    concatImages = cat(1, croppedImages{:});
+    e = randperm(length(concatImages), 50);
+    
+    % Show 50 random spots with it's Index
+    figure;
+    for i = 1:50
+        subplot(10, 5, i);    
+        imagesc(concatImages{e(i)}), colormap gray, axis image, axis off;
+        title(sprintf('Rescaled Spot %d', e(i)));
+        drawnow;
+    end
+    
+end

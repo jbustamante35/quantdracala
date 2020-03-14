@@ -1,0 +1,120 @@
+PCA Notes
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+A few basic functions to grasp:
+  - cov: Create covariance matrix
+  - eig: Determine eigenvalues and eigenvectors 
+  - svd: Singular value decomposition of matrix
+  - pca: PCA on raw data [see notes below]
+  - nfunction: Gets alpha values to get conversion factors for eventually
+      reducing a dimension of the data [dim reduction]
+
+% [COEFF, SCORE, LATENT, TSQUARED, EXPLAINED, MU] = pca(X, 'param')
+Principal Component Analysis (pca) on raw data
+
+Key Output Variables: 
+COEFF: returns the principal component coefficients for the N
+    by P data matrix X. Rows of X correspond to observations and columns to
+    variables. Each column of COEFF contains coefficients for one principal
+    component.
+SCORE: returns the principal component score, which is
+    the representation of X in the principal component space. Rows of SCORE
+    correspond to observations, columns to components.
+LATENT: returns the principal component
+    variances, i.e., the eigenvalues of the covariance matrix of X
+TSQUARED: returns Hotelling's T-squared
+    statistic for each observation in X. pca uses all principal components
+    to compute the TSQUARED (computes in the full space) even when fewer
+    components are requested
+EXPLAINED: returns a vector
+    containing the percentage of the total variance explained by each
+    principal component.
+MU: returns the
+    estimated mean, MU, when 'Centered' is set to true; and all zeros when
+    set to false.
+
+Key Input Parameters:
+  'Algorithm': Algorithm used for analysis
+      - svd (default), eig, als
+  'Centered': Centering columns of matrix X
+      - true (subtract off column means), false (no centering)
+  'NumComponents': The number of components desired, specified as a
+                   scalar integer K satisfying 0 < K <= P.
+%
+% [V,D,W] = eig(A, B, 'param')
+Eigenvalues and eigenvectors for PCA on covariance matrix A. 
+Basically, this function produces a diagonal matrix D of eigenvalues and 
+    a full matrix V whose columns are the corresponding eigenvectors  
+    so that A*V = V*D. W produces full matrix whose columns are the
+    corresponding left eigenvectors so that W'*A = D*W'.
+
+E = eig(A) produces a single column vector E containing the eigenvalues
+    of a square matrix A (i.e. not diagonal matrix of size A)
+%
+% C = cov(X)
+Covariance matrix of X. The mean is removed from each column before 
+    calculating the result.
+If X is a vector, returns the variance.  For matrices, where each row
+    is an observation, and each column a variable, cov(X) is the 
+    covariance matrix.  
+
+DIAG(cov(X)) is a vector of variances for each column.
+
+SQRT(DIAG(cov(X))) is a vector of standard deviations. 
+
+cov(X,Y), where X and Y are matrices with the same number of elements,
+    is equivalent to cov([X(:) Y(:)]).
+%
+% [U,S,V] = svd(X)
+Singular value decomposition for dimensionality reduction.
+
+S: produces diagonal matrix of size(X) with nonnegative diagonal elements in
+    decreasing order.
+U: Unitary matrix such that X = U * S * V'.
+V: Unitary matrix such that X = U * S * V'.
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Basic steps for PCA
+1) Combine all test images into single multi-dimansinoal matrix X
+      - Matrix X aligns all pixels of all images [prod(size(im)) * N]
+      - Column aligment allows each pixel coordinate to act as a new dimension
+          for the dataset, where all N images are a new experiment 
+      - Example: Set of 500 images of 40x40 pixels
+        pixT = 40*40 = 1600 so X = [1600 500]
+          Image       PixelCoordinate
+           im001    [pix1 pix2 ... pix1600]
+           im002    [pix1 pix2 ... pix1600]
+            .       [pix1 pix2 ... pix1600]
+            .       [pix1 pix2 ... pix1600]
+           im500    [pix1 pix2 ... pix1600]
+
+      - Alternatively, I should keep each image in 40x40 matrix and
+          compare all N 40x40 matrices in cell array or structure. This
+          would create a stack of N images in 40x40 matrices
+      - In this structure, pixel coordinates would be compared at 
+          Vn = imN(pixX,pixY) for all N images
+      - Example: Set of 500 images of 40x40 pixels
+                 im001            im002            im500
+              X1 X2 . X40       X1 X2 . X40       X1 X2 . X40
+          Y1  V1 0  0  0    Y1  V2 0  0  0    Y1  Vn 0  0  0
+          Y2  0  0  0  0    Y2  0  0  0  0    Y2  0  0  0  0
+           .  0  0  0  0     .  0  0  0  0     .  0  0  0  0
+          Y40 0  0  0  0    Y40 0  0  0  0    Y40 0  0  0  0
+          
+2) Get covariance matrix covX of matrix X 
+      - Matrix values should represent covariance at all 
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% Create my own PCA pipeline [coming soon!]
+% Create covariance matrix and reduce dimensionality to N components
+covImages = cov(alignImages);
+% [V, W, D] = eig(covImages, 'matrix');
+myEigs = struct('V', V, 'W', W, 'D', D);
+centerX = bsxfun(@minus, alignImages, mean(alignImages, 1));
+covX = cov(centerX);
+[V, D] = eigs(covX, 3);
+innerReg_im = V * innerRegression;
+imInneRReg = reshape(innerReg_im, 40, 40);
+innerRadiusReg = (allImages{1}(:) + mean(alignImages, 1)')' * imInneRReg(:)+15.1;
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+

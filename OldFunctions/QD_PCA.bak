@@ -1,0 +1,206 @@
+function [pcaOutput, trainingData, validationData, alignImages] = QD_PCA(croppedImages, NumComponents, TrainingSize, Dim4Training, Visualize)
+% QD_PCA: Function to conduct Principal Component Analysis on a given data
+% set. Data is stored in a structure containing the 6 main outputs from
+% Matlab's built-in pca() function. 
+%
+% This function creates the raster data set, which is the full n x m matrix 
+% of data to use for PCA. It then stores the output from Matlab's built-in 
+% pca() function into the Matlab structure pcaOutput. The user defines how
+% many principal components should be extracted from the data set.
+%
+% Training and Validation subsets are also outputted, where the user
+% defines how large these subsets should be. The representation of outliers
+% is 30-30-40 for low outliers, high outliers, and randomly-chosen data.
+% The 3 subsets are chosen from the user-defined dimension from PCA scores
+% (pcaOutput.SCORE), or the principal component in which to define an
+% outlier (Recommended dimension for QD2 is Principal Component 2). 
+%
+% Data from PCA, the training subset, and the validation subset are all
+% stored into .mat files in the working directory. 
+%
+% If boolean Visualization is true, then a total of 8 figures will be
+% generated, which include showing sample images from training and
+% validation sets, as well as data on PCA data. 
+%
+% Usage: 
+%   [pcaOutput, trainingData, validationData, alignImages] = QD_PCA(croppedImages, NumComponents, TrainingSize, Dim4Training, Visualize)
+%
+% Input: 
+%   croppedImages: Structure containing all images 
+%   NumComponents: Number of principal components to reduce to
+%   TrainingSize: Number of spots to use for training and validation sets
+%   Dim4Training: Principal component to sort to decide outliers
+%   Visualize: Output figures to visualize data 
+%
+% Output:
+%   pcaOutput: Structure containing all 6 matrices from pca() function
+%   trainingData: Training subset with Index, Image, and PCA scores
+%   validationData: VAlidation subset with Index, Image, and PCA scores
+%   alignImages: Full n x m data matrix to use for PCA (n = number of
+%   observations, m = linearized matrix of a scaled crop image
+%
+
+%% Create matrix of full dataset 
+[alignImages, allImages] = createMatrix(croppedImages);
+
+%% Matlab's built-in function for Principal Components Analysis
+[C, S, L, T, E, M] = pca(alignImages, 'NumComponents', NumComponents, 'Algorithm', 'eig');
+pcaOutput = struct('COEFF', C, 'SCORE', S, 'LATENT', L, 'TSQUARED', T, 'EXPLAINED', E, 'MU', M);
+
+%% Get training and validation subsets
+[trainingData, validationData] = getSubset(allImages, pcaOutput.SCORE, Dim4Training, TrainingSize, Visualize);
+
+%% Save data into .mat files
+dateString = datestr(now, 'yymmdd');
+saveString_pca = sprintf('%s_PrincipalComponent_%dPCs_%dImages_pcaOutput.mat', dateString, NumComponents, size(allImages, 1));
+saveString_training = sprintf('%s_PrincipalComponent_%dPCs_%dSet_trainingData.mat', dateString, NumComponents, TrainingSize);
+saveString_validation = sprintf('%s_PrincipalComponent_%dPCs_%dSet_validationData.mat', dateString, NumComponents, TrainingSize);
+save(saveString_pca, 'pcaOutput');
+save(saveString_training, 'trainingData');
+save(saveString_validation, 'validationData');
+
+%% Show results from PCA
+if (Visualize == true)
+    showPCA(pcaOutput, [41 41], NumComponents);
+end
+
+end
+
+%%%%%%%%%%%%%%%%%%%%%%%%%% END OF MAIN PIPELINE %%%%%%%%%%%%%%%%%%%%%%%%%%
+%% subfunction: createMatrix()
+function [dataMatrix, im_cat] = createMatrix(im)
+    % Create full data matrix for PCA
+    % Combine all spots across all plates, then linearize all spots into
+    % a large stack of slices of n x m length (n = number of observations,
+    % and m = flattened images length)
+    im_cat = cat(1, im{:});
+    dataMatrix = zeros(length(im_cat), numel(im_cat{1}));
+    for i = 1:length(im_cat)
+        dataMatrix(i,:) = im_cat{i}(:);
+    end
+end
+
+%% subfunction: getSubset()
+function [trainingData, validationData] = getSubset(concatImages, pcaScores, dim2Sort, subsetSize, visualize)
+    % 
+    % Get indeces for outliers and random spots
+    [subsetIndex_training, subsetIndex_validation] = getSubsetIndex(concatImages, pcaScores, dim2Sort, subsetSize, visualize);
+    
+    % Collect training data structure
+    trainingIndex = num2cell(subsetIndex_training);
+    trainingImages = arrayfun(@(x) concatImages{x}, subsetIndex_training, 'UniformOutput', 0);
+    trainingScores = arrayfun(@(x) pcaScores(x,:), subsetIndex_training, 'UniformOutput', 0);
+    trainingData = struct('Index', trainingIndex, 'Image', trainingImages, 'PCAscore', trainingScores);
+
+    % Collect validation data structure
+    validationIndex = num2cell(subsetIndex_validation);
+    validationImages = arrayfun(@(x) concatImages{x}, subsetIndex_validation, 'UniformOutput', 0);
+    validationScores = arrayfun(@(x) pcaScores(x,:), subsetIndex_validation, 'UniformOutput', 0);
+    validationData = struct('Index', validationIndex, 'Image', validationImages, 'PCAscore', validationScores);               
+
+    %% getTrainingIndex: get indeces of outliers and random data
+    function [trainingSubsetIndex, validationSubsetIndex] =  getSubsetIndex(concatImages, pcaData, dim4Training, trainingSize, visualize)
+    % Determines outliers based on Scores of given Principal Component 
+    % Save a training dataset that has 30% Low Outlier, 30% High Outlier,
+    % and 40% Random Index to use for training. 
+
+    % Set sizes of different sets of outlier/random data
+    % Double size of training size to allow indexing for training and
+    % validation datasets
+        fullIndex = 2 * trainingSize;
+        outlierSize = round(0.3 * fullIndex);
+        randomSize = fullIndex - (2 * outlierSize); 
+
+    % Sort PCA Scores by index and get 30% Low/High Outliers 
+        [~, sortedIndex] = sortrows(pcaData, dim4Training);
+        lowOutliers = sort(sortedIndex(1 : outlierSize));
+        highOutliers = sort(sortedIndex((end - outlierSize)+1 : end));
+
+    % Get 40% Random Index (exclude 60% Outliers)
+        remainingIndex = sort(sortedIndex((outlierSize+1) : (end - outlierSize)));
+        randomSpots = sort(randperm(length(remainingIndex), randomSize))';
+
+    % Separate indeces for training and validation subsets
+        t_lowSubset = lowOutliers(1:outlierSize/2);
+        t_highSubset = highOutliers(1:outlierSize/2);
+        t_randomSubset = randomSpots(1:randomSize/2);
+        
+        trainingSubsetIndex = cat(1, t_lowSubset, t_highSubset, t_randomSubset);        
+    
+    % Separate indeces for training and validation subsets
+        v_lowSubset = lowOutliers((outlierSize/2)+1:end);
+        v_highSubset = highOutliers((outlierSize/2)+1:end);
+        v_randomSubset = randomSpots((randomSize/2)+1:end);
+    
+        validationSubsetIndex = cat(1, v_lowSubset, v_highSubset, v_randomSubset);
+        
+    % Visualize sample of indexed spots for each subset 
+        if (visualize == true)
+            plotTestData(concatImages, t_lowSubset, length(t_lowSubset), dim4Training, 'Lowest (training)');
+            plotTestData(concatImages, t_highSubset, length(t_highSubset), dim4Training, 'Highest (training)');
+            plotTestData(concatImages, t_randomSubset, length(t_randomSubset), dim4Training, 'Random (training)');
+
+            plotTestData(concatImages, v_lowSubset, length(v_lowSubset), dim4Training, 'Lowest (validation)');
+            plotTestData(concatImages, v_highSubset, length(v_highSubset), dim4Training, 'Highest (validation)');
+            plotTestData(concatImages, v_randomSubset, length(v_randomSubset), dim4Training, 'Random (validation)');             
+        end
+    end
+    
+    %% plotTestData: Plot Low/High Outliers and Random Index
+    function plotTestData(concatImages, subsetIndex, sizeOfIndex, dim4Training, setName)
+    % Input: 
+    %   setForIndex: Array of indeces of data set
+    %   sizeOfIndex: Length of data set
+    % 
+    % Constants:
+    %   concatImages: Combined set of full image data to extract subset
+    %   dim4Training: Dimension of PCA scores to use for getting outliers
+    %   
+        figure;
+        for ii = 1:sizeOfIndex
+            subplot(round(sizeOfIndex/5), 5, ii);
+            imagesc(concatImages{subsetIndex(ii)}), colormap gray, axis image, axis off;
+        end
+        setTitle = sprintf('%d %s Values: Principal Component %d', sizeOfIndex, setName, dim4Training);
+        subplot(round(sizeOfIndex/5), 5, 3); title(setTitle);
+
+    end
+
+
+end
+
+%% showPCA();
+function showPCA(pcaData, scaleSize, NumComponents)    
+    figure;
+    imagesc(pcaData.SCORE), title('Scores of 3 Principal Components'), colormap gray, axis off;
+
+    figure;
+    pcaData.resCOEFF = reshape(pcaData.COEFF, scaleSize(1), scaleSize(2), NumComponents);
+    subplot(131); imagesc(pcaData.resCOEFF(:,:,1)), colormap gray, axis image, axis off, title('1st Principal Component');
+    subplot(132); imagesc(pcaData.resCOEFF(:,:,2)), colormap gray, axis image, axis off, title('2nd Principal Component');
+    subplot(133); imagesc(pcaData.resCOEFF(:,:,3)), colormap gray, axis image, axis off, title('3rd Principal Component');
+end
+
+
+%% SearchAllImages;
+function SearchAllImages(testImages) 
+% Quickly run through all test images
+    combinedImages = cat(1, testImages{:});
+    figure(1);
+    subplotIncrementer = 1;
+    tic;
+    for i = 1:length(combinedImages)
+            subplot(3, 3, subplotIncrementer); 
+            imagesc(combinedImages{i}), colormap gray, axis image, axis off;
+            pause(0.0001);
+
+            if (subplotIncrementer == 9)
+                subplotIncrementer = 1; 
+            else
+                subplotIncrementer = subplotIncrementer + 1;
+            end        
+    end
+    fprintf('Took %.04f seconds to run through all images\n', toc);
+    
+end
+

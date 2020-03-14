@@ -1,0 +1,127 @@
+function validationData = ValidateTraining(validationData, innerRegression, outerRegression)
+% validateTraining: 
+% Quantify prediction accuracy from PCA by manually checking 100 
+% spots and comparing to predicted value. 
+% Get same representation of 30-30-40 Low-High-Random based on PC 2.
+% asdf 
+% 
+% Usage: 
+%   [trainingTable, regressionScore] = TrainRadii(trainingData, trainingSize, NumComponents, radius2train)
+% 
+% Input: 
+%   validationData: 
+%   innerRegression: 
+%   outerRegression: 
+%
+% Output: 
+%   validationTable: 
+% 
+
+validationTable = struct2table(validationData);
+
+%% Get radius location for each image
+% Ask for pixel along radius of n training images    
+validationTable = getUserRadii(validationTable);
+
+%% Calculate distance from user coordinate to spot's centroid coordinate
+validationTable = calculateUserRadius(validationTable);
+
+%% Get predicted radii distances 
+outerMean = mean(validationTable.UserOuterDistance);
+validationTable.PredictedOuterDistance = (validationTable.PCAscore * outerRegression) + outerMean;   
+innerMean = mean(validationTable.UserInnerDistance);
+validationTable.PredictedInnerDistance = (validationTable.PCAscore * innerRegression) + innerMean;   
+
+%% Compare percentage difference between user vs predicted values
+compareRadii(validationTable.UserOuterDistance, validationTable.PredictedOuterDistance, 'Outer');
+compareRadii(validationTable.UserInnerDistance, validationTable.PredictedInnerDistance, 'Inner');
+
+%% Store trained data and regression score into structure and save in .mat file
+validationData = table2struct(validationTable);
+dateString = datestr(now, 'yymmdd');
+saveString_validateData = sprintf('%s_TrainedData_%dPCs_%dSet_trainedData.mat', dateString, length(validationData));
+save(saveString_validateData, 'validationData');
+
+end
+
+%%%%%%%%%%%%%%%%%%%%%%%%%% END OF MAIN PIPELINE %%%%%%%%%%%%%%%%%%%%%%%%%%
+%% subfunction: getUserRadii()
+function dataTable = getUserRadii(dataTable)
+    % Get radius location for each image
+    % Ask for pixel along radius of n training images    
+    dataTable.OuterCoords = zeros(size(dataTable, 1), 2);
+    dataTable.InnerCoords = zeros(size(dataTable, 1), 2);
+    figure;
+    for i = 1:size(dataTable, 1)
+        imagesc(dataTable.Image{i}), colormap gray, axis image, axis off;
+        title(sprintf('Click on Outer Radius Location:\nTraining Set Image %d', i)); 
+        [dataTable.OuterCoords(i,1), dataTable.OuterCoords(i,2), ~] = impixel();
+        title(sprintf('Click on Inner Radius Location:\nTraining Set Image %d', i)); 
+        [dataTable.InnerCoords(i,1), dataTable.InnerCoords(i,2), ~] = impixel();
+    end
+end
+%% subfunction: calculateUserRadius()
+function dataTable = calculateUserRadius(dataTable)
+    % Calculate distance from user-defined radius location to centroid
+    % Segment to find edges, then find circle from BW image
+    imEdges = cellfun(@(x) edge(x, 'canny', 0.01), dataTable.Image, 'UniformOutput', 0);
+    [centroids, ~] = cellfun(@(x) imfindcircles(x, [12 25], 'Method', 'TwoStage'), imEdges, 'UniformOutput', 0); 
+
+    % Add centroid location to image and use my own getDists() function to
+    % calculate distance to centroid location 
+    dataTable.Centroids = cell2mat(centroids);
+    dataTable.UserOuterDistance = getDists(dataTable.OuterCoords, dataTable.Centroids);
+    dataTable.UserInnerDistance = getDists(dataTable.InnerCoords, dataTable.Centroids);
+    
+    %% getDists()
+    function coordinateDistances = getDists(XY1, XY2)
+        % Use for a less robust distance formula to calculate
+        % coordinate distances with conflicting data types. 
+        % For this trainMyImages() function, the dist() function would 
+        % give the following error:
+        %     Error using bsxfun
+        %     Non-singleton dimensions of the two input arrays must match each other.
+        % 
+        %     Error in dist.apply>iDistApplyCPU (line 20)
+        %           z(:,q) = sum(bsxfun(@minus,w,pt(q,:)).^2,2);
+        % 
+        %     Error in dist.apply (line 11)
+        %         z = iDistApplyCPU(w,p,S,Q);
+        % 
+        %     Error in dist (line 61)
+        %       d = dist.apply(w,varargin{:});
+        %
+        % This old-fashioned getDists() function requires 2 separate double 
+        % arrays as input parameters and avoids this conflict.
+
+        x1 = XY1(:, 1);
+        y1 = XY1(:, 2);
+        x2 = XY2(:, 1);
+        y2 = XY2(:, 2);    
+        coordinateDistances = sqrt((x1 - x2).^2 + (y1 - y2).^2);    
+    end
+
+end
+
+%% compareRadii()
+function compareRadii(userRadius, predictedRadius, radius2Train)
+    % Compare user-defined radii distances with predicted distances 
+    figure;
+    subplot(211);
+    title(sprintf('%s Radius Training', radius2Train));
+    hold on;
+    plot(userRadius, 'r-');
+    plot(predictedRadius, 'g-');
+    legend('User-Defined', 'Predicted');
+    xlabel('Validation Set Image', 'FontWeight', 'bold', 'FontSize', 14);
+    ylabel(sprintf('%s Circle Radius (pix)', radius2Train), 'FontWeight', 'bold', 'FontSize', 14);
+    ylim([0 25]);
+    
+    subplot(212);
+    title(sprintf('User vs. Predicted: %s Radius', radius2Train));
+    plot(userRadius, predictedRadius, 'b.');
+    legend(sprintf('%s Radius Training', radius2Train));
+    xlabel('User-Defined Radius', 'FontWeight', 'bold', 'FontSize', 14);
+    ylabel('Predicted Radius', 'FontWeight', 'bold', 'FontSize', 14);
+
+end
